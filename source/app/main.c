@@ -28,19 +28,12 @@
 #include "stm32f4xx.h"
 #include "stm32rtos.h"
 #include "task.h"
-#include "queue.h"
 #include "system.h"
 #include "gpio.h"
-#include "adc.h"
 #include "st7066u.h"
 #include "printf.h"
 
-typedef struct adc_event_t {
-    uint16_t digital_value;
-} adc_event_t;
-
-/* Queue used to send and receive complete struct AMessage structures. */
-QueueHandle_t adc_queue = NULL;
+TaskHandle_t xDisplayTaskHandle;
 
 static void vTaskLED(void *pvParameters)
 {
@@ -66,7 +59,6 @@ static void vTaskLED(void *pvParameters)
 
 static void vTaskDisplay(void *pvParameters)
 {
-    adc_event_t adc_event;
     (void)pvParameters;
 
     st7066u_hw_control_t hw = {
@@ -85,41 +77,31 @@ static void vTaskDisplay(void *pvParameters)
     st7066u_init(hw);
 
     st7066u_cmd_function_set(ST7066U_8_BITS_DATA, ST7066U_2_LINE_DISPLAY, ST7066U_5x8_SIZE);
-    st7066u_cmd_function_set(ST7066U_8_BITS_DATA, ST7066U_2_LINE_DISPLAY, ST7066U_5x8_SIZE);
-
     st7066u_cmd_on_off(ST7066U_DISPLAY_ON, ST7066U_CURSOR_OFF, ST7066U_CURSOR_POSITION_OFF);
     st7066u_cmd_clear_display();
     st7066u_cmd_entry_mode(ST7066U_INCREMENT_ADDRESS, ST7066U_SHIFT_DISABLED);
 
     st7066u_write_str("    Welcome!    ");
     st7066u_cmd_set_ddram(0x40);
-    st7066u_write_str("ADC meas on PB0");
+    st7066u_write_str("LCD Display Demo");
     vTaskDelay(2000 / portTICK_PERIOD_MS);
 
     for (;;) {
-        if (xQueueReceive(adc_queue, &adc_event, portMAX_DELAY) == pdPASS) {
-            char txt[17] = {0};
-            float voltage = adc_event.digital_value * 3.3f / 4096.0f;
+        TaskStatus_t xTaskDetails;
+        char txt[17] = {0};
 
-            st7066u_cmd_clear_display();
-            sprintf(txt, "     %4.2f V     ", voltage);
-            st7066u_write_str(txt);
-            st7066u_cmd_set_ddram(0x40);
-            sprintf(txt, "    %4d dig    ", adc_event.digital_value);
-            st7066u_write_str(txt);
-        }
-    }
-}
+        /* Use the handle to obtain further information about the task. */
+        vTaskGetInfo(xDisplayTaskHandle, &xTaskDetails, pdTRUE, eInvalid );
 
-static void vTaskAdc(void *pvParameters)
-{
-    adc_event_t adc_event;
-    (void)pvParameters;
+        st7066u_cmd_clear_display();
+        sprintf(txt, "%s [%d]", xTaskDetails.pcTaskName, xTaskDetails.uxCurrentPriority);
+        st7066u_write_str(txt);
 
-    for (;;) {
-        adc_event.digital_value = adc_analog_read();
-        xQueueSend(adc_queue, &adc_event, (TickType_t) 0);
-        vTaskDelay(200 / portTICK_PERIOD_MS);
+        st7066u_cmd_set_ddram(0x40);
+        sprintf(txt, "Runtime: %d", xTaskDetails.ulRunTimeCounter);
+        st7066u_write_str(txt);
+
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
 
@@ -131,16 +113,9 @@ int main(void)
     /* initialize the gpio */
     gpio_init();
 
-    /* initialize the adc */
-    adc_init();
-
-    /* create the queues */
-    adc_queue = xQueueCreate(1, sizeof(adc_event_t));
-
     /* create the tasks specific to this application. */
     xTaskCreate(vTaskLED, "vTaskLED", configMINIMAL_STACK_SIZE, NULL, 3, NULL);
-    xTaskCreate(vTaskDisplay, "vTaskDisplay", configMINIMAL_STACK_SIZE*2, NULL, 2, NULL);
-    xTaskCreate(vTaskAdc, "vTaskAdc", configMINIMAL_STACK_SIZE, NULL, 2, NULL);
+    xTaskCreate(vTaskDisplay, "vTaskDisplay", configMINIMAL_STACK_SIZE*2, NULL, 2, &xDisplayTaskHandle);
 
     /* start the scheduler. */
     vTaskStartScheduler();
